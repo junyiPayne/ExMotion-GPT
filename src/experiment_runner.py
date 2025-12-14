@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from data_loader import SlidingWindowDataset
 from model import CNNBiLSTMAttention
 from trainer import Trainer
+from torch.utils.data import random_split
 
 # 简单的模型工厂
 class ModelFactory:
@@ -22,35 +23,39 @@ class ExperimentRunner:
         }
 
     def run_benchmark(self):
-        print(">>> [ExoResearch] 启动自动化消融实验...")
+        print(">>> [ExoResearch] 启动自动化消融实验 (Automated Ablation Study)...")
         
-        # 1. 准备模拟数据 (3通道, 100长度)
-        # 实际应从 CSV 加载
-        print(">>> 生成模拟数据集...")
-        X_raw = torch.randn(100, 3, 100)
-        y = torch.randint(0, 5, (100,))
+        # 1. 准备数据
+        print(">>> 生成模拟数据集 (含混合特征)...")
+        # 模拟 200 个样本 (比之前多一点，方便划分)
+        X_raw = torch.randn(200, 3, 100)
+        y = torch.randint(0, 5, (200,))
         
-        # 使用 DataProcessor 中的 Dataset (包含特征工程)
-        dataset = SlidingWindowDataset(X_raw, y, use_features=True)
-        loader = DataLoader(dataset, batch_size=16, shuffle=True)
+        full_dataset = SlidingWindowDataset(X_raw, y, use_features=True)
         
-        # 获取手工特征维度 (3个通道 * 5种特征 = 15)
-        # 这里自动推断
-        sample_feat = dataset[0]['feat']
-        feat_dim = sample_feat.shape[0] * sample_feat.shape[1] 
+        # --- 关键修改：科研严谨性，划分训练集和验证集 (80/20) ---
+        train_size = int(0.8 * len(full_dataset))
+        val_size = len(full_dataset) - train_size
+        train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+        
+        train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+        
+        # 自动推断特征维度
+        sample_feat = full_dataset[0]['feat']
+        feat_dim = sample_feat.numel() # 3通道 * 5特征 = 15
 
-        # 2. 遍历配置运行实验 [cite: 401-409]
+        # 2. 遍历配置运行实验
         for name, cfg in self.configs.items():
             print(f"\n--> Running Experiment: {name}")
             
-            # 构建模型 (传入 feature_dim 支持混合特征)
             model = ModelFactory.build(cfg, feature_dim=feat_dim)
-            
-            # 训练
             trainer = Trainer(model)
-            acc, f1 = trainer.fit(loader)
             
-            print(f"    Result -> Acc: {acc:.4f}, F1: {f1:.4f}")
+            # 传入 train 和 val loader
+            acc, f1 = trainer.fit(train_loader, val_loader, epochs=5)
+            
+            print(f"    [Final Result] Val Acc: {acc:.4f}, Val F1: {f1:.4f}")
             self.results[name] = {"Accuracy": acc, "F1": f1}
             
         self.export_report()
