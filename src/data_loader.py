@@ -47,20 +47,33 @@ class DataProcessor:
 
 def compute_baseline_features(window):
     """
-    计算手工特征 (Hybrid Features) [cite: 342-350]
+    [cite_start]计算手工特征 (Hybrid Features) [cite: 342-350]
+    包含时域 (Time) 和频域 (Frequency) 特征
     """
-    # 时域特征
+    # 1. 时域特征
     rms = torch.sqrt(torch.mean(window ** 2, dim=-1))
     ptp = window.max(dim=-1).values - window.min(dim=-1).values
     rss = torch.sqrt(torch.sum(window ** 2, dim=-1))
     
-    # 频域特征 (简化版，实际应用需做FFT)
-    # 这里为了代码可运行，使用简单的统计特征代替
-    mean_val = window.mean(dim=-1)
-    std_val = window.std(dim=-1)
+    # 2. 频域特征 (使用 FFT 实现真实的 MNF)
+    # RFFT: 实数快速傅里叶变换
+    fft_res = torch.fft.rfft(window, dim=-1)
+    mag_spec = torch.abs(fft_res) # 幅度谱
+    power_spec = mag_spec ** 2    # 功率谱
     
-    # 堆叠特征
-    return torch.stack([rms, ptp, rss, mean_val, std_val], dim=-1)
+    # 计算频率轴 (假设 fs=200, N=100)
+    freqs = torch.linspace(0, 100, steps=mag_spec.shape[-1]).to(window.device)
+    
+    # MNF (Mean Frequency) = sum(f * P(f)) / sum(P(f))
+    mnf = torch.sum(freqs * power_spec, dim=-1) / (torch.sum(power_spec, dim=-1) + 1e-8)
+    
+    # MDF (Median Frequency) - 简化近似：用功率谱的能量中值代替
+    # 这里为了代码简洁，用频谱的最大峰值频率 (Peak Freq) 代替第二个频域特征
+    peak_freq = freqs[torch.argmax(power_spec, dim=-1)]
+    
+    # 3. 堆叠所有特征
+    # (Batch, Channels, 5) -> 最终维度
+    return torch.stack([rms, ptp, rss, mnf, peak_freq], dim=-1)
 
 class SlidingWindowDataset(Dataset):
     def __init__(self, X_raw, y, use_features=True):
